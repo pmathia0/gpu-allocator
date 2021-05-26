@@ -282,6 +282,18 @@ impl SubAllocation<PossiblyInitialized> {
             .map(|()| unsafe { std::mem::transmute(self) })
     }
 
+    pub fn mapped_uninit_slice(&self) -> Option<&[std::mem::MaybeUninit<u8>]> {
+        self.mapped_ptr().map(|ptr| unsafe {
+            std::slice::from_raw_parts(ptr.cast().as_ptr(), self.size as usize)
+        })
+    }
+
+    pub fn mapped_uninit_mut_slice(&mut self) -> Option<&mut [std::mem::MaybeUninit<u8>]> {
+        self.mapped_ptr().map(|ptr| unsafe {
+            std::slice::from_raw_parts_mut(ptr.cast().as_ptr(), self.size as usize)
+        })
+    }
+
     /// Returns a valid mapped slice if the memory is host-visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
     /// # Safety
@@ -294,6 +306,7 @@ impl SubAllocation<PossiblyInitialized> {
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
     /// # Safety
     /// Returns a slice to memory that is possibly not initialized.
+    // TODO: mapped_mut_slice, following the usual Rust semantics?
     pub unsafe fn mapped_slice_mut(&mut self) -> Option<&mut [u8]> {
         self.as_mut_slice()
     }
