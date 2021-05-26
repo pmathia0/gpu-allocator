@@ -241,13 +241,13 @@ impl<T: MemoryInitState> SubAllocation<T> {
         self.size
     }
 
-    /// Returns a valid mapped pointer if the memory is host visible, otherwise it will return None.
+    /// Returns a valid mapped pointer if the memory is host-visible, otherwise it will return None.
     /// The pointer already points to the exact memory region of the suballocation, so no offset needs to be applied.
     pub fn mapped_ptr(&self) -> Option<std::ptr::NonNull<std::ffi::c_void>> {
         self.mapped_ptr
     }
 
-    /// Returns a valid mapped slice if the memory is host visible, otherwise it will return None.
+    /// Returns a valid mapped slice if the memory is host-visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
     fn as_slice(&self) -> Option<&[u8]> {
         self.mapped_ptr().map(|ptr| unsafe {
@@ -255,7 +255,7 @@ impl<T: MemoryInitState> SubAllocation<T> {
         })
     }
 
-    /// Returns a valid mapped mutable slice if the memory is host visible, otherwise it will return None.
+    /// Returns a valid mapped mutable slice if the memory is host-visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
     fn as_mut_slice(&mut self) -> Option<&mut [u8]> {
         self.mapped_ptr().map(|ptr| unsafe {
@@ -269,7 +269,20 @@ impl<T: MemoryInitState> SubAllocation<T> {
 }
 
 impl SubAllocation<PossiblyInitialized> {
-    /// Returns a valid mapped slice if the memory is host visible, otherwise it will return None.
+    /// Initialized memory from the host if the memory is host-visible.
+    pub fn initialize(mut self, data: &[u8]) -> Option<SubAllocation<Initialized>> {
+        // Safety: The slice may map uninitialized memory. copy_from_slice will only write to it.
+        unsafe { self.mapped_slice_mut() }
+            .map(|tgt| tgt.copy_from_slice(data))
+            // TODO: redo this
+            // .map(|()| SubAllocation::<Initialized> {
+            //     phantom: PhantomData,
+            //     ..self
+            // })
+            .map(|()| unsafe { std::mem::transmute(self) })
+    }
+
+    /// Returns a valid mapped slice if the memory is host-visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
     /// # Safety
     /// Returns a slice to memory that is possibly not initialized.
@@ -277,7 +290,7 @@ impl SubAllocation<PossiblyInitialized> {
         self.as_slice()
     }
 
-    /// Returns a valid mapped mutable slice if the memory is host visible, otherwise it will return None.
+    /// Returns a valid mapped mutable slice if the memory is host-visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
     /// # Safety
     /// Returns a slice to memory that is possibly not initialized.
@@ -287,13 +300,13 @@ impl SubAllocation<PossiblyInitialized> {
 }
 
 impl SubAllocation<Initialized> {
-    /// Returns a valid mapped slice if the memory is host visible, otherwise it will return None.
+    /// Returns a valid mapped slice if the memory is host-visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
     pub fn mapped_slice(&self) -> Option<&[u8]> {
         self.as_slice()
     }
 
-    /// Returns a valid mapped mutable slice if the memory is host visible, otherwise it will return None.
+    /// Returns a valid mapped mutable slice if the memory is host-visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
     pub fn mapped_slice_mut(&mut self) -> Option<&mut [u8]> {
         self.as_mut_slice()
@@ -702,7 +715,7 @@ impl VulkanAllocator {
                 && !flags.contains(vk::MemoryPropertyFlags::HOST_COHERENT)
         });
         if host_visible_not_coherent {
-            log!(Level::Warn, "There is a memory type that is host visible, but not host coherent. It's time to upgrade our memory allocator to take advantage of this type of memory :)");
+            log!(Level::Warn, "There is a memory type that is host-visible, but not host coherent. It's time to upgrade our memory allocator to take advantage of this type of memory :)");
         }
 
         let memory_types = memory_types
