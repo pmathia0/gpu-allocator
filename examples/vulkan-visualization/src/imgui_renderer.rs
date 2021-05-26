@@ -2,7 +2,9 @@ use ash::version::DeviceV1_0;
 use ash::vk;
 
 use crate::helper::record_and_submit_command_buffer;
-use gpu_allocator::{AllocationCreateDesc, MemoryLocation, SubAllocation, VulkanAllocator};
+use gpu_allocator::{
+    AllocationCreateDesc, MemoryLocation, PossiblyInitialized, SubAllocation, VulkanAllocator,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -15,16 +17,16 @@ pub struct ImGuiRenderer {
 
     vb_capacity: u64,
     ib_capacity: u64,
-    vb_allocation: SubAllocation,
-    ib_allocation: SubAllocation,
+    vb_allocation: SubAllocation<PossiblyInitialized>,
+    ib_allocation: SubAllocation<PossiblyInitialized>,
     vertex_buffer: vk::Buffer,
     index_buffer: vk::Buffer,
 
-    cb_allocation: SubAllocation,
+    cb_allocation: SubAllocation<PossiblyInitialized>,
     constant_buffer: vk::Buffer,
 
     font_image: vk::Image,
-    font_image_memory: SubAllocation,
+    font_image_memory: SubAllocation<PossiblyInitialized>,
     font_image_view: vk::ImageView,
 
     descriptor_sets: Vec<vk::DescriptorSet>,

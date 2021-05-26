@@ -58,6 +58,8 @@
 //! unsafe { device.destroy_buffer(buffer, None) };
 //! ```
 #![deny(clippy::unimplemented, clippy::unwrap_used, clippy::ok_expect)]
+use std::marker::PhantomData;
+
 use ash::version::{DeviceV1_0, InstanceV1_0};
 use ash::vk;
 use log::{log, Level};
@@ -182,8 +184,17 @@ trait SubAllocator: SubAllocatorBase + std::fmt::Debug {
     }
 }
 
+// Based on https://docs.rs/glutin/0.26.0/glutin/trait.ContextCurrentState.html
+/// Marker trait for initialization status
+pub trait MemoryInitState {}
+
+pub struct PossiblyInitialized;
+impl MemoryInitState for PossiblyInitialized {}
+pub struct Initialized;
+impl MemoryInitState for Initialized {}
+
 #[derive(Clone, Debug)]
-pub struct SubAllocation {
+pub struct SubAllocation<T: MemoryInitState> {
     chunk_id: Option<std::num::NonZeroU64>,
     memory_block_index: usize,
     memory_type_index: usize,
@@ -194,17 +205,19 @@ pub struct SubAllocation {
 
     name: Option<String>,
     backtrace: Option<String>,
+
+    phantom: PhantomData<T>,
 }
 
 // Sending is fine because mapped_ptr does not change based on the thread we are in
-unsafe impl Send for SubAllocation {}
+unsafe impl<T: MemoryInitState> Send for SubAllocation<T> {}
 // Sync is also okay because Sending &SubAllocation is safe: a mutable reference
 // to the data in mapped_ptr is never exposed while `self` is immutably borrowed.
 // In order to break safety guarantees, the user needs to `unsafe`ly dereference
 // `mapped_ptr` themselves.
-unsafe impl Sync for SubAllocation {}
+unsafe impl<T: MemoryInitState> Sync for SubAllocation<T> {}
 
-impl SubAllocation {
+impl<T: MemoryInitState> SubAllocation<T> {
     /// Returns the `vk::DeviceMemory` object that is backing this allocation.
     /// This memory object can be shared with multiple other allocations and shouldn't be freed (or allocated from)
     /// without this library, because that will lead to undefined behavior.
@@ -236,7 +249,7 @@ impl SubAllocation {
 
     /// Returns a valid mapped slice if the memory is host visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
-    pub fn mapped_slice(&self) -> Option<&[u8]> {
+    fn as_slice(&self) -> Option<&[u8]> {
         self.mapped_ptr().map(|ptr| unsafe {
             std::slice::from_raw_parts(ptr.cast().as_ptr(), self.size as usize)
         })
@@ -244,7 +257,7 @@ impl SubAllocation {
 
     /// Returns a valid mapped mutable slice if the memory is host visible, otherwise it will return None.
     /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
-    pub fn mapped_slice_mut(&mut self) -> Option<&mut [u8]> {
+    fn as_mut_slice(&mut self) -> Option<&mut [u8]> {
         self.mapped_ptr().map(|ptr| unsafe {
             std::slice::from_raw_parts_mut(ptr.cast().as_ptr(), self.size as usize)
         })
@@ -255,7 +268,39 @@ impl SubAllocation {
     }
 }
 
-impl Default for SubAllocation {
+impl SubAllocation<PossiblyInitialized> {
+    /// Returns a valid mapped slice if the memory is host visible, otherwise it will return None.
+    /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
+    /// # Safety
+    /// Returns a slice to memory that is possibly not initialized.
+    pub unsafe fn mapped_slice(&self) -> Option<&[u8]> {
+        self.as_slice()
+    }
+
+    /// Returns a valid mapped mutable slice if the memory is host visible, otherwise it will return None.
+    /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
+    /// # Safety
+    /// Returns a slice to memory that is possibly not initialized.
+    pub unsafe fn mapped_slice_mut(&mut self) -> Option<&mut [u8]> {
+        self.as_mut_slice()
+    }
+}
+
+impl SubAllocation<Initialized> {
+    /// Returns a valid mapped slice if the memory is host visible, otherwise it will return None.
+    /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
+    pub fn mapped_slice(&self) -> Option<&[u8]> {
+        self.as_slice()
+    }
+
+    /// Returns a valid mapped mutable slice if the memory is host visible, otherwise it will return None.
+    /// The slice already references the exact memory region of the suballocation, so no offset needs to be applied.
+    pub fn mapped_slice_mut(&mut self) -> Option<&mut [u8]> {
+        self.as_mut_slice()
+    }
+}
+
+impl Default for SubAllocation<PossiblyInitialized> {
     fn default() -> Self {
         Self {
             chunk_id: None,
@@ -267,6 +312,7 @@ impl Default for SubAllocation {
             mapped_ptr: None,
             name: None,
             backtrace: None,
+            phantom: PhantomData,
         }
     }
 }
@@ -378,7 +424,7 @@ impl MemoryType {
         desc: &AllocationCreateDesc,
         granularity: u64,
         backtrace: Option<&str>,
-    ) -> Result<SubAllocation> {
+    ) -> Result<SubAllocation<PossiblyInitialized>> {
         let allocation_type = if desc.linear {
             AllocationType::Linear
         } else {
@@ -444,6 +490,7 @@ impl MemoryType {
                 mapped_ptr: std::ptr::NonNull::new(mem_block.mapped_ptr),
                 name: Some(desc.name.to_owned()),
                 backtrace: backtrace.map(|s| s.to_owned()),
+                phantom: PhantomData,
             });
         }
 
@@ -477,6 +524,7 @@ impl MemoryType {
                             mapped_ptr,
                             name: Some(desc.name.to_owned()),
                             backtrace: backtrace.map(|s| s.to_owned()),
+                            phantom: PhantomData,
                         });
                     }
                     Err(err) => match err {
@@ -548,10 +596,15 @@ impl MemoryType {
             mapped_ptr,
             name: Some(desc.name.to_owned()),
             backtrace: backtrace.map(|s| s.to_owned()),
+            phantom: PhantomData,
         })
     }
 
-    fn free(&mut self, sub_allocation: SubAllocation, device: &ash::Device) -> Result<()> {
+    fn free<T: MemoryInitState>(
+        &mut self,
+        sub_allocation: SubAllocation<T>,
+        device: &ash::Device,
+    ) -> Result<()> {
         let block_idx = sub_allocation.memory_block_index;
 
         let mem_block = self.memory_blocks[block_idx]
@@ -684,7 +737,10 @@ impl VulkanAllocator {
         }
     }
 
-    pub fn allocate(&mut self, desc: &AllocationCreateDesc) -> Result<SubAllocation> {
+    pub fn allocate(
+        &mut self,
+        desc: &AllocationCreateDesc,
+    ) -> Result<SubAllocation<PossiblyInitialized>> {
         let size = desc.requirements.size;
         let alignment = desc.requirements.alignment;
 
@@ -786,7 +842,7 @@ impl VulkanAllocator {
         }
     }
 
-    pub fn free(&mut self, sub_allocation: SubAllocation) -> Result<()> {
+    pub fn free<T: MemoryInitState>(&mut self, sub_allocation: SubAllocation<T>) -> Result<()> {
         if self.debug_settings.log_frees {
             let name = sub_allocation.name.as_deref().unwrap_or("<null>");
             log!(Level::Debug, "Freeing `{}`", name);
