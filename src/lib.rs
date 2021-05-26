@@ -271,6 +271,10 @@ impl<T: MemoryInitState> SubAllocation<T> {
 impl SubAllocation<PossiblyInitialized> {
     /// Initialized memory from the host if the memory is host-visible.
     pub fn initialize(mut self, data: &[u8]) -> Option<SubAllocation<Initialized>> {
+        // Safe, but on nightly only: https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.write_slice.
+        // self.mapped_uninit_mut_slice()
+        //     .map(|tgt| std::mem::MaybeUninit::write_slice(tgt, data))
+
         // Safety: The slice may map uninitialized memory. copy_from_slice will only write to it.
         unsafe { self.mapped_slice_mut() }
             .map(|tgt| tgt.copy_from_slice(data))
@@ -299,6 +303,7 @@ impl SubAllocation<PossiblyInitialized> {
     /// # Safety
     /// Returns a slice to memory that is possibly not initialized.
     pub unsafe fn mapped_slice(&self) -> Option<&[u8]> {
+        // std::mem::MaybeUninit::slice_assume_init_ref(self.mapped_uninit_slice())
         self.as_slice()
     }
 
@@ -308,6 +313,7 @@ impl SubAllocation<PossiblyInitialized> {
     /// Returns a slice to memory that is possibly not initialized.
     // TODO: mapped_mut_slice, following the usual Rust semantics?
     pub unsafe fn mapped_slice_mut(&mut self) -> Option<&mut [u8]> {
+        // std::mem::MaybeUninit::slice_assume_init_mut(self.mapped_uninit_mut_slice())
         self.as_mut_slice()
     }
 }
